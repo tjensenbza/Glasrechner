@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flachglas Gewichtsrechner</title>
+  <style>
+    :root { font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #111; }
+    header { padding: 18px 16px; background: white; position: sticky; top: 0; box-shadow: 0 1px 0 rgba(0,0,0,.06); z-index: 10; }
+    h1 { margin: 0 0 6px; font-size: 18px; }
+    .sub { font-size: 12px; color: #555; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 14px 12px 80px; }
+    .totals { background: white; border-radius: 12px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); margin-bottom: 12px; }
+    .totals .big { font-size: 28px; font-weight: 800; margin: 6px 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .row { background: white; border-radius: 12px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.05); margin-bottom: 10px; }
+    .rowhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .rowhead .title { font-weight: 700; }
+    .badge { font-size: 12px; color: #444; background: #f1f2f4; padding: 6px 10px; border-radius: 999px; }
+    label { font-size: 12px; color: #555; display: block; margin: 4px 0 4px; }
+    input, select, button {
+      width: 100%;
+      font-size: 16px;
+      padding: 10px 10px;
+      border: 1px solid #d9dbe1;
+      border-radius: 10px;
+      background: #fff;
+      box-sizing: border-box;
+    }
+    .inline { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .inline3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .actions3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 12px; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    button { border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .primary { background: #0b5cff; color: white; font-weight: 700; }
+    .ghost { background: #eef2ff; color: #0b5cff; font-weight: 700; }
+    .danger { background: #ffecec; color: #b00020; font-weight: 700; }
+    .muted { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.35; }
+    .kpi { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .kpi > div { background: #f6f7f9; border-radius: 10px; padding: 10px; flex: 1; min-width: 140px; }
+    .kpi .k { font-size: 12px; color: #666; }
+    .kpi .v { font-size: 18px; font-weight: 800; margin-top: 2px; }
+    .small { font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Flachglas Gewichtsrechner</h1>
+    <div class="sub">Floatglas: <b>2,5 kg / m² / mm</b> · Rundung: <b>0,1 kg</b> · Maße in mm</div>
+  </header>
+
+  <div class="wrap">
+    <div class="totals">
+      <div class="grid">
+        <div>
+          <div class="small">Gesamtfläche</div>
+          <div class="big" id="totalArea">0,0000 m²</div>
+        </div>
+        <div>
+          <div class="small">Gesamtgewicht (gerundet)</div>
+          <div class="big" id="totalWeight">0,0 kg</div>
+        </div>
+      </div>
+
+      <div class="actions3">
+        <button type="button" class="ghost" id="addRow">+ Position hinzufügen</button>
+        <button type="button" class="ghost" id="exportCSV">CSV exportieren</button>
+        <button type="button" class="primary" id="printPDF">Als PDF speichern</button>
+      </div>
+
+      <div class="muted">
+        Tipp: Diese Version rendert nicht mehr neu bei jeder Eingabe → Tastatur bleibt offen.<br/>
+        PDF: <b>Als PDF speichern</b> → Drucken → mit 2 Fingern “aufziehen” → PDF → Teilen/Speichern.
+      </div>
+    </div>
+
+    <div id="rows"></div>
+
+    <button type="button" class="danger" id="clearAll">Alles löschen</button>
+  </div>
+
+<script>
+(() => {
+  const KG_PER_M2_PER_MM = 2.5;
+  const ROUND_STEP_KG = 0.1;
+  const THICKNESS_OPTIONS = [3,4,5,6,8,10,12,15,19];
+
+  const rowsEl = document.getElementById("rows");
+  const totalAreaEl = document.getElementById("totalArea");
+  const totalWeightEl = document.getElementById("totalWeight");
+
+  const fmt = (n, decimals) => (isFinite(n) ? n : 0).toLocaleString("de-DE", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  });
+
+  const parseDE = (v) => {
+    const s = String(v ?? "").trim().replace(",", ".");
+    const n = Number(s);
+    return isFinite(n) ? n : 0;
+  };
+
+  const roundToStep = (value, step) => step > 0 ? Math.round(value / step) * step : value;
+
+  const defaultRow = () => ({
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random(),
+    name: "",
+    widthMM: "",
+    heightMM: "",
+    thicknessMode: "preset",
+    thicknessPreset: 8,
+    thicknessManual: "",
+    qty: 1
+  });
+
+  let state = [{ ...defaultRow(), name:"Beispiel", widthMM:"1000", heightMM:"500", thicknessPreset:8, qty:1 }];
+
+  function thicknessMM(r){
+    return r.thicknessMode === "manual" ? parseDE(r.thicknessManual) : Number(r.thicknessPreset || 0);
+  }
+  function areaPerM2(r){
+    const w = parseDE(r.widthMM) / 1000;
+    const h = parseDE(r.heightMM) / 1000;
+    return w * h;
+  }
+  function weightPerKgRaw(r){
+    return areaPerM2(r) * thicknessMM(r) * KG_PER_M2_PER_MM;
+  }
+
+  function recalcRow(rowEl, r){
+    const q = Math.max(0, Number(r.qty || 0));
+    const areaT = areaPerM2(r) * q;
+    const weightTotRaw = weightPerKgRaw(r) * q;
+    const weightTot = roundToStep(weightTotRaw, ROUND_STEP_KG);
+
+    rowEl.querySelector("[data-out='badge']").textContent =
+      `Fläche ges.: ${fmt(areaT,4)} m² · Gewicht ges.: ${fmt(weightTot,1)} kg`;
+
+    rowEl.querySelector("[data-out='kpiArea']").textContent = `${fmt(areaT,4)} m²`;
+    rowEl.querySelector("[data-out='kpiPer']").textContent = `${fmt(weightPerKgRaw(r),3)} kg`;
+    rowEl.querySelector("[data-out='kpiTot']").textContent = `${fmt(weightTot,1)} kg`;
+    rowEl.querySelector("[data-out='activeT']").value = `${fmt(thicknessMM(r),1)} mm`;
+  }
+
+  function recalcTotals(){
+    let areaSum = 0, weightRawSum = 0;
+    for (const r of state){
+      const q = Math.max(0, Number(r.qty || 0));
+      areaSum += areaPerM2(r) * q;
+      weightRawSum += weightPerKgRaw(r) * q;
+    }
+    totalAreaEl.textContent = `${fmt(areaSum, 4)} m²`;
+    totalWeightEl.textContent = `${fmt(roundToStep(weightRawSum, ROUND_STEP_KG), 1)} kg`;
+  }
+
+  function escapeHTML(s){
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#39;");
+  }
+
+  function rowHTML(r, idx){
+    return `
+      <div class="row" data-id="${r.id}">
+        <div class="rowhead">
+          <div class="title">Position ${idx + 1}</div>
+          <div class="badge" data-out="badge">-</div>
+        </div>
+
+        <label>Positionsname</label>
+        <input type="text" placeholder="z. B. Tür links" value="${escapeHTML(r.name)}" data-k="name" />
+
+        <div class="inline">
+          <div>
+            <label>Breite (mm)</label>
+            <input type="text" inputmode="decimal" placeholder="z. B. 1000" value="${escapeHTML(r.widthMM)}" data-k="widthMM" />
+          </div>
+          <div>
+            <label>Höhe (mm)</label>
+            <input type="text" inputmode="decimal" placeholder="z. B. 500" value="${escapeHTML(r.heightMM)}" data-k="heightMM" />
+          </div>
+        </div>
+
+        <div class="inline3">
+          <div>
+            <label>Stärke verwenden</label>
+            <select data-k="thicknessMode">
+              <option value="preset" ${r.thicknessMode==="preset"?"selected":""}>Dropdown</option>
+              <option value="manual" ${r.thicknessMode==="manual"?"selected":""}>Manuell</option>
+            </select>
+          </div>
+          <div>
+            <label>Dropdown (mm)</label>
+            <select data-k="thicknessPreset">
+              ${THICKNESS_OPTIONS.map(v => `<option value="${v}" ${Number(r.thicknessPreset)===v?"selected":""}>${v} mm</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Manuell (mm)</label>
+            <input type="text" inputmode="decimal" placeholder="z. B. 8" value="${escapeHTML(r.thicknessManual)}" data-k="thicknessManual" />
+          </div>
+        </div>
+
+        <div class="inline">
+          <div>
+            <label>Stückzahl</label>
+            <input type="number" min="0" step="1" value="${Number(r.qty||0)}" data-k="qty" />
+          </div>
+          <div>
+            <label>Aktive Stärke</label>
+            <input type="text" data-out="activeT" value="-" disabled />
+          </div>
+        </div>
+
+        <div class="kpi">
+          <div>
+            <div class="k">Gewicht pro Stück (Rohwert)</div>
+            <div class="v" data-out="kpiPer">-</div>
+          </div>
+          <div>
+            <div class="k">Fläche gesamt</div>
+            <div class="v" data-out="kpiArea">-</div>
+          </div>
+          <div>
+            <div class="k">Gewicht gesamt (0,1 kg)</div>
+            <div class="v" data-out="kpiTot">-</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="ghost" data-action="dup">Duplizieren</button>
+          <button type="button" class="danger" data-action="del">Löschen</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAll(){
+    rowsEl.innerHTML = state.map((r,i) => rowHTML(r,i)).join("");
+    // Initial berechnen
+    rowsEl.querySelectorAll(".row").forEach((rowEl, i) => recalcRow(rowEl, state[i]));
+    recalcTotals();
+  }
+
+  // Event Delegation: Inputs
+  rowsEl.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+
+    const key = el.getAttribute("data-k");
+    if (!key) return;
+
+    const rowEl = el.closest(".row");
+    if (!rowEl) return;
+
+    const id = rowEl.getAttribute("data-id");
+    const idx = state.findIndex(r => r.id === id);
+    if (idx < 0) return;
+
+    let value = el.value;
+    if (key === "qty") value = Number(value || 0);
+    if (key === "thicknessPreset") value = Number(value || 0);
+
+    state[idx] = { ...state[idx], [key]: value };
+
+    // Nur diese eine Zeile + Totals neu berechnen (kein Re-Render)
+    recalcRow(rowEl, state[idx]);
+    recalcTotals();
+  });
+
+  // Event Delegation: Buttons
+  rowsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+
+    const action = btn.getAttribute("data-action");
+    const rowEl = btn.closest(".row");
+    const id = rowEl?.getAttribute("data-id");
+    const idx = state.findIndex(r => r.id === id);
+
+    if (idx < 0) return;
+
+    if (action === "del") {
+      state.splice(idx, 1);
+      if (state.length === 0) state.push(defaultRow());
+      renderAll();
+    }
+    if (action === "dup") {
+      const copy = { ...state[idx], id: defaultRow().id };
+      state.splice(idx + 1, 0, copy);
+      renderAll();
+    }
+  });
+
+  // Top buttons
+  document.getElementById("addRow").addEventListener("click", () => {
+    state.push(defaultRow());
+    renderAll();
+  });
+
+  document.getElementById("clearAll").addEventListener("click", () => {
+    state = [defaultRow()];
+    renderAll();
+  });
+
+  document.getElementById("printPDF").addEventListener("click", () => window.print());
+
+  document.getElementById("exportCSV").addEventListener("click", () => {
+    const lines = [];
+    lines.push("Nr;Name;Breite_mm;Hoehe_mm;Staerke_mm;Modus;Stueck;Flaeche_m2_proStk;Flaeche_m2_gesamt;Gewicht_kg_proStk;Gewicht_kg_gesamt(gerundet)");
+
+    let totalArea = 0, totalWeightRaw = 0;
+
+    state.forEach((r, i) => {
+      const w = parseDE(r.widthMM);
+      const h = parseDE(r.heightMM);
+      const t = thicknessMM(r);
+      const q = Math.max(0, Number(r.qty || 0));
+
+      const areaPer = (w/1000) * (h/1000);
+      const areaTot = areaPer * q;
+
+      const weightPer = areaPer * t * KG_PER_M2_PER_MM;
+      const weightTotRaw = weightPer * q;
+      const weightTot = roundToStep(weightTotRaw, ROUND_STEP_KG);
+
+      totalArea += areaTot;
+      totalWeightRaw += weightTotRaw;
+
+      const safeName = String(r.name||"").replaceAll(";", ",");
+      lines.push([
+        i+1, safeName, Math.round(w), Math.round(h),
+        fmt(t,1), r.thicknessMode, q,
+        fmt(areaPer,4), fmt(areaTot,4),
+        fmt(weightPer,3), fmt(weightTot,1)
+      ].join(";"));
+    });
+
+    lines.push("");
+    lines.push(`;SUMME;;;;;;${fmt(totalArea,4)};;${fmt(roundToStep(totalWeightRaw, ROUND_STEP_KG),1)}`);
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "Flachglas_Gewicht.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
